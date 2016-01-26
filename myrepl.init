@@ -1,0 +1,14 @@
+import scalaz.concurrent._
+import rapture.core._
+import rapture.core.scalazInterop
+import cats.free._
+import cats.implicits._
+import cats._
+import scala.language.higherKinds
+import scala.collection.mutable.ListBuffer
+
+val replesent = REPLesent(input="presentation.md", intp=$intp)
+import replesent._
+f
+f
+help
