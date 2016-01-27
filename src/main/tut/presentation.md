@@ -186,7 +186,8 @@ object ConsoleCatsInterpreter extends (Interact ~> Task) {
     case Ask(prompt) =>
       Task.delay { 
         println(prompt)
-        scala.io.StdIn.readLine()
+        //scala.io.StdIn.readLine()
+        "Tom"
       }
     case Tell(msg) =>
       Task.delay(println(msg))
@@ -234,17 +235,139 @@ val interpreters: CatsApp ~> Task = InMemoryDatasourceInterpreter or ConsoleCats
 
 And we can finally apply our program applying the interpreter to the free monad
 
-```scala
+```tut:silent
 import Interacts._, DataSource._
+import cats.Monad
+
+implicit val taskMonad = new Monad[Task] {
+  override def flatMap[A, B](fa: Task[A])(f: (A) => Task[B]): Task[B] = fa flatMap f
+  override def pure[A](x: A): Task[A] = Task.now(x)
+}
 
 val evaled = program foldMap interpreters
 ```
 
 ---
 
+## Requirements ##
+
+- **Free of Interpretation**
+- Support Parallel Computation 
+- Composable pieces
+- Dependency Injection / IOC
+- Fault Tolerance
+
+---
+
 ## Interpretation : Free Applicatives ##
 
 What about parallel computations? 
+
+---
+
+## Interpretation : Free Applicatives ##
+
+Unlike Free Monads which are good for dependent computations
+Free Applicatives are good to represent independent computations.
+
+```tut:silent
+sealed abstract class ValidationOp[A]
+
+case class ValidNameSize(size: Int) extends ValidationOp[Boolean]
+
+case object IsAlleyCat extends ValidationOp[Boolean]
+```
+
+---
+
+## Interpretation : Free Applicatives ##
+
+We may use the same smart constructor pattern to lift our Algebras
+to the `FreeApplicative` context.
+
+```tut:silent
+import cats.free.FreeApplicative
+
+type Validation[A] = FreeApplicative[ValidationOp, A]
+
+object ValidationOps {
+  
+  def validNameSize(size: Int): FreeApplicative[ValidationOp, Boolean] =
+    FreeApplicative.lift[ValidationOp, Boolean](ValidNameSize(size))
+    
+  def isAlleyCat: FreeApplicative[ValidationOp, Boolean] =
+    FreeApplicative.lift[ValidationOp, Boolean](IsAlleyCat)
+    
+}
+```
+
+---
+
+## Interpretation : Free Applicatives ##
+
+```tut:silent
+import cats.data.Kleisli
+
+type ParValidator[A] = Kleisli[Task, String, A]
+
+implicit val validationInterpreter : ValidationOp ~> ParValidator =
+  new (ValidationOp ~> ParValidator) {
+    def apply[A](fa: ValidationOp[A]): ParValidator[A] =
+      Kleisli { str =>
+        fa match {
+          case ValidNameSize(size) => Task.unsafeStart(str.length >= size)
+          case IsAlleyCat  => Task.unsafeStart(str.toLowerCase.endsWith("unsafe"))
+        }
+      }
+  }
+```
+
+---
+
+## Interpretation : Free Applicatives ##
+
+|@| The Applicative builder helps us composing applicatives
+And the resulting `Validation` can also be interpreted
+
+```tut:silent
+import cats.implicits._
+
+def InMemoryDatasourceInterpreter(implicit validationInterpreter : ValidationOp ~> ParValidator) = 
+ new (DataOp ~> Task) {
+    
+  private[this] val memDataSet = new ListBuffer[String]
+  
+  def apply[A](fa: DataOp[A]) = fa match {
+    case AddCat(a) => Task.delay(memDataSet.append(a))
+    case GetAllCats() => Task.delay(memDataSet.toList)
+    case ValidateCatName(name) =>
+      import ValidationOps._, cats._, cats.syntax.all._
+      val validation : Validation[Boolean] = (validNameSize(5) |@| isAlleyCat) map { case (l, r) => l && r }
+      Task.fork(validation.foldMap(validationInterpreter).run(name))
+  }
+}
+```
+
+---
+
+## Interpretation : Free Applicatives ##
+
+Our program can now be evaluated again and it's able to validate inputs in a parallel fashion
+
+```tut:silent
+val interpreter: CatsApp ~> Task = InMemoryDatasourceInterpreter or ConsoleCatsInterpreter
+val evaled = program.foldMap(interpreter).unsafePerformSyncAttempt
+```
+
+---
+
+## Requirements ##
+
+- **Free of Interpretation**
+- **Support Parallel Computation** 
+- Composable pieces
+- Dependency Injection / IOC
+- Fault Tolerance
 
 ---
 
@@ -274,7 +397,7 @@ for a given input it returns a type constructor…
 
 When the type constructor `M[_]` it's a Monad it can be monadically composed
 
-```scala
+```tut:silent
 val composed = for {
   a <- Kleisli((x : String) ⇒ Option(x.toInt + 1))
   b <- Kleisli((x : String) ⇒ Option(x.toInt * 2))
@@ -289,7 +412,7 @@ The deferred injection of the input parameter enables
 **Dependency Injection**. This is an alternative to implicits
 commonly known as DI with the Reader monad.
 
-```scala
+```tut:silent
 val composed = for {
   a <- Kleisli((x : String) ⇒ Option(x.toInt + 1))
   b <- Kleisli((x : String) ⇒ Option(x.toInt * 2))
@@ -303,6 +426,7 @@ composed.run("1")
 ## Requirements ##
 
 - **Free of Interpretation**
+- **Support Parallel Computation** 
 - **Composable pieces**
 - **Dependency Injection / IOC**
 - Fault Tolerance
@@ -314,7 +438,7 @@ composed.run("1")
 Most containers and patterns generalize to the 
 most common super-type or simply `Throwable` loosing type information.
 
-```scala
+```tut:silent
 val f = scala.concurrent.Future.failed(new NumberFormatException)
 val t = scala.util.Try(throw new NumberFormatException)
 val d = for {
@@ -338,17 +462,19 @@ We could use instead…
 
 ## Fault Tolerance : Dependently-typed Acc Exceptions ##
 
-Introducing `rapture.core.Result` 
+```tut:silent
+import rapture.core._
+```
 
 ---
 
 ## Fault Tolerance : Dependently-typed Acc Exceptions ##
 
-`Result` is similar to `\/` but has 3 possible outcomes
+`Result` is similar to `Xor`, `\/` and `Ior` but has 3 possible outcomes
 
 (Answer, Errata, Unforeseen)
 
-```scala
+```tut:silent
 val op = for {
   a <- Result.catching[NumberFormatException]("1".toInt)
   b <- Result.errata[Int, IllegalArgumentException](
@@ -362,7 +488,7 @@ val op = for {
 
 `Result` uses dependently typed monadic exception accumulation
 
-```scala
+```tut:silent
 val op = for {
   a <- Result.catching[NumberFormatException]("1".toInt)
   b <- Result.errata[Int, IllegalArgumentException](
@@ -376,7 +502,7 @@ val op = for {
 
 You may recover by `resolving` errors to an `Answer`.
 
-```scala
+```tut:silent
 op resolve (
     each[IllegalArgumentException](_ ⇒ 0),
     each[NumberFormatException](_ ⇒ 0),
@@ -389,7 +515,7 @@ op resolve (
 
 Or `reconcile` exceptions into a new custom one.
 
-```scala
+```tut:silent
 case class MyCustomException(e : Exception) extends Exception(e.getMessage)
 
 op reconcile (
@@ -402,10 +528,11 @@ op reconcile (
 
 ## Recap ##
 
-- **Free Monads** : Free of Interpretation
-- **Coproducts** : Composable pieces
-- **Implicits & Kleisli** : Dependency Injection / IOC
-- **Dependently typed checked exceptions** Fault tolerant
+- Free of Interpretation : **Free Monads** 
+- Support Parallel Computation : **Free Applicatives**
+- Composable pieces : **Coproducts** 
+- Dependency Injection / IOC : **Implicits & Kleisli** 
+- Fault tolerant : **Dependently typed checked exceptions** 
 
 ---
 
