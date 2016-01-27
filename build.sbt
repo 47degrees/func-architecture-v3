@@ -2,7 +2,7 @@ import sbt.Keys._
 
 val scalaV = "2.11.7"
 
-scalacOptions += "-feature"
+scalacOptions ++= Seq("-feature", "-language:higherKinds")
 
 scalaVersion := scalaV
 
@@ -21,10 +21,11 @@ resolvers ++= Seq(
   ) 
 
 libraryDependencies ++= Seq(
-  "org.spire-math" %% "cats" % "0.4.0-SNAPSHOT" changing(),
+  "org.scalaz" %% "scalaz-concurrent" % "7.2.0",
+  "org.spire-math" %% "cats" % "0.4.0-SNAPSHOT",
   "org.scala-lang" % "scala-compiler" % scalaV,
-  "com.propensive" %% "rapture-core" % "2.0.+" changing(),
-  "com.propensive" %% "rapture-core-scalaz" % "2.0.+" changing()	
+  "com.propensive" %% "rapture-core" % "2.0.+",
+  "com.propensive" %% "rapture-core-scalaz" % "2.0.+"
 )
 
 scalacOptions in (Compile, console) ++= Seq(

@@ -20,6 +20,7 @@ build-lists: true
 - Rúnar Bjarnason : Compositional Application Architecture With Reasonably Priced Monads
 - Noel Markham : A purely functional approach to building large applications
 - Wouter Swierstra : FUNCTIONAL PEARL Data types a la carte
+- Free Applicative Functors : Paolo Caprioti
 - Rapture : Jon Pretty
 
 ---
@@ -31,6 +32,7 @@ All meaningful architectural patterns can be achieved with pure FP
 When I build an app I want it to be
 
 - Free of Interpretation
+- Support Parallel Computation 
 - Composable pieces
 - Dependency Injection / IOC
 - Fault Tolerance
@@ -40,6 +42,7 @@ When I build an app I want it to be
 When I build an app I want it to be
 
 - Free of Interpretation : **Free Monads** 
+- Support Parallel Computation : **Free Applicatives**
 - Composable pieces : **Coproducts** 
 - Dependency Injection / IOC : **Implicits & Kleisli** 
 - Fault tolerant : **Dependently typed checked exceptions** 
@@ -64,29 +67,15 @@ What is an Application?
 
 ## Interpretation : Free Monads ##
 
-Let's build an app that reads a contact and performs some operations with it
+Let's build an app that reads a Cat, validates some input and stores it
 
 ---
 
 ## Interpretation : Free Monads ##
 
-A very simple model
+Our first Algebra models our program interaction with the end user
 
-```tut
-case class Contact(
-      firstName: String,
-      lastName: String,
-      phoneNumber: String)
-	
-```
-
----
-
-## Interpretation : Free Monads ##
-
-Our first Algebra is interaction with a user
-
-```tut
+```tut:silent
 sealed trait Interact[A]
 
 case class Ask(prompt: String) extends Interact[String]
@@ -98,14 +87,16 @@ case class Tell(msg: String) extends Interact[Unit]
 
 ## Interpretation : Free Monads ##
 
-Our second Algebra is about persistence
+Our second Algebra is about persistence and data validation
 
-```tut
+```tut:silent
 sealed trait DataOp[A]
 
-case class AddContact(a: Contact) extends DataOp[Unit]
+case class AddCat(a: String) extends DataOp[Unit]
 
-case class GetAllContacts() extends DataOp[List[Contact]]
+case class ValidateCatName(a: String) extends DataOp[Boolean]
+
+case class GetAllCats() extends DataOp[List[String]]
 ```
 
 ---
@@ -114,33 +105,27 @@ case class GetAllContacts() extends DataOp[List[Contact]]
 
 **An application is the Coproduct of its algebras**
 
-```tut
+```tut:silent
 import cats.data.Coproduct
 
-type AgendaApp[A] = Coproduct[DataOp, Interact, A]
+type CatsApp[A] = Coproduct[DataOp, Interact, A]
 ```
 
 ---
 
 ## Interpretation : Free Monads ##
 
-**We can now lift different algebras to our App monad and compose them**
+**We can now lift different algebras to our App monad via smart constructors and compose them**
 
-```tut
+```tut:silent
 import cats.free.{Inject, Free}
 
 class Interacts[F[_]](implicit I: Inject[Interact, F]) {
-
   def tell(msg: String): Free[F, Unit] = Free.inject[Interact, F](Tell(msg))
-
   def ask(prompt: String): Free[F, String] = Free.inject[Interact, F](Ask(prompt))
-
 }
-    	
 object Interacts {
-
-  implicit def interacts[F[_]](implicit I: Inject[Interact, F]): Interacts[F] = new Interacts[F]
-
+  implicit def instance[F[_]](implicit I: Inject[Interact, F]): Interacts[F] = new Interacts[F]
 }
 ```
 
@@ -148,21 +133,16 @@ object Interacts {
 
 ## Interpretation : Free Monads ##
 
-**We can now lift different algebras to our App monad and compose them**
+**We can now lift different algebras to our App monad via smart constructors and compose them**
 
-```tut
+```tut:silent
 class DataSource[F[_]](implicit I: Inject[DataOp, F]) {
-
-  def addContact(a: Contact): Free[F, Unit] = Free.inject[DataOp, F](AddContact(a))
-    
-  def getAllContacts: Free[F, List[Contact]] = Free.inject[DataOp, F](GetAllContacts())
-
-} 
-
+  def addCat(a: String): Free[F, Unit] = Free.inject[DataOp, F](AddCat(a))
+  def validateCatName(a: String): Free[F, Boolean] = Free.inject[DataOp, F](ValidateCatName(a))
+  def getAllCats: Free[F, List[String]] = Free.inject[DataOp, F](GetAllCats())
+}
 object DataSource {
-
   implicit def dataSource[F[_]](implicit I: Inject[DataOp, F]): DataSource[F] = new DataSource[F]
-
 }
 ```
 
@@ -174,42 +154,42 @@ At this point a program is nothing but **Data**
 describing the sequence of execution but **FREE** 
 of its runtime interpretation.
 
-```tut
-def program(implicit I : Interacts[AgendaApp], D : DataSource[AgendaApp]) = { 
+```tut:silent
+def program(implicit I : Interacts[CatsApp], D : DataSource[CatsApp]) = {
 
   import I._, D._
 
   for {
-   firstName <- ask("First Name:")
-   lastName <- ask("Last Name:")
-   phoneNumber <- ask("Phone Number:")
-   _ <- addContact(Contact(firstName, lastName, phoneNumber))
-   contacts <- getAllContacts
-   _ <- tell(contacts.toString)
+    cat <- ask("What's the kitty's name")
+    valid <- validateCatName(cat)
+    _ <- if (valid) addCat(cat) else tell(s"Invalid cat name '$cat'")
+    cats <- getAllCats
+    _ <- tell(cats.toString)
   } yield ()
 }
+
 ```
 
 ---
 
 ## Interpretation : Free Monads ##
 
-We isolate interpretations 
-via Natural transformations AKA `Interpreters`.
+We isolate interpretations via Natural transformations AKA `Interpreters`.
+In other words with map over the outer type constructor of our Algebras.
 
-In other words with map over 
-the outer type constructor of our Algebras
+```tut:silent
+import cats.~>
+import scalaz.concurrent.Task
 
-```tut
-import cats.{~>, Id}
-
-object ConsoleContactReader extends (Interact ~> Id) {
+object ConsoleCatsInterpreter extends (Interact ~> Task) {
   def apply[A](i: Interact[A]) = i match {
     case Ask(prompt) =>
-      println(prompt)
-      scala.io.StdIn.readLine()
+      Task.delay { 
+        println(prompt)
+        scala.io.StdIn.readLine()
+      }
     case Tell(msg) =>
-      println(msg)
+      Task.delay(println(msg))
   }
 }
 ```
@@ -218,22 +198,21 @@ object ConsoleContactReader extends (Interact ~> Id) {
 
 ## Interpretation : Free Monads ##
 
-We isolate interpretations 
-via Natural transformations AKA `Interpreters`.
+We isolate interpretations via Natural transformations AKA `Interpreters`.
+In other words with map over the outer type constructor of our Algebras.
 
 In other words with map over 
 the outer type constructor of our Algebras
 
-```tut
+```tut:silent
 import scala.collection.mutable.ListBuffer
 
-object InMemoryDatasourceInterpreter extends (DataOp ~> Id) {
-  
-  private[this] val memDataSet = new ListBuffer[Contact]
-   
-  override def apply[A](fa: DataOp[A]) = fa match {
-    case AddContact(a) => memDataSet.append(a); ()
-    case GetAllContacts() => memDataSet.toList
+object InMemoryDatasourceInterpreter extends (DataOp ~> Task) {
+  private[this] val memDataSet = new ListBuffer[String]
+  def apply[A](fa: DataOp[A]) = fa match {
+    case AddCat(a) => Task.delay(memDataSet.append(a))
+    case GetAllCats() => Task.delay(memDataSet.toList)
+    case ValidateCatName(name) => Task.now(true)
   }
 }
 ```
@@ -245,8 +224,8 @@ object InMemoryDatasourceInterpreter extends (DataOp ~> Id) {
 Now that we have a way to combine interpreters 
 we can lift them to the app Coproduct
 
-```tut
-val interpreters: AgendaApp ~> Id = InMemoryDatasourceInterpreter or ConsoleContactReader
+```tut:silent
+val interpreters: CatsApp ~> Task = InMemoryDatasourceInterpreter or ConsoleCatsInterpreter
 ```
 
 ---
@@ -260,6 +239,12 @@ import Interacts._, DataSource._
 
 val evaled = program foldMap interpreters
 ```
+
+---
+
+## Interpretation : Free Applicatives ##
+
+What about parallel computations? 
 
 ---
 
@@ -426,7 +411,7 @@ op reconcile (
 
 ## What's next? ##
 
-If you want to sequence or comprehend over unrelated monads you need Transformers.
+If you want to compute with unrelated nested monads you need Transformers.
 
 Transformers are supermonads that help you flatten through nested monads such as
 Future[Option] or Kleisli[Task[Disjuntion]] binding to the most inner value.
