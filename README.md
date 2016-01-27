@@ -1,4 +1,4 @@
-# Functional Programming Patterns v2 #
+# Functional Programming Patterns v3 #
 (For the pragmatic programmer)
 
 In this talk we will see a pragmatic approach to building a purely functional architecture that delivers cohesive functional components. 
